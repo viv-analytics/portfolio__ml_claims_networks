@@ -263,6 +263,45 @@ to reduced average claim cost. Stage 3 quantifies the causal effect size per seg
 
 Four linked analyses underpin the numbers above. Each answers a specific management question.
 
+```{mermaid}
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#003781', 'primaryTextColor': '#ffffff', 'primaryBorderColor': '#002060', 'lineColor': '#6B7280', 'secondaryColor': '#0066CC', 'tertiaryColor': '#EEF3FA', 'tertiaryTextColor': '#003781', 'tertiaryBorderColor': '#003781'}}}%%
+flowchart TD
+    classDef dataStyle  fill:#003781,color:#fff,stroke:#002060
+    classDef storeStyle fill:#DAEAF7,color:#003781,stroke:#003781
+    classDef stageStyle fill:#0066CC,color:#fff,stroke:#004D99
+    classDef outputStyle fill:#00A9CE,color:#fff,stroke:#007A99
+    classDef dashStyle  fill:#FF6600,color:#fff,stroke:#CC5200
+
+    SIM["00_simulate_data.R · mirai 4 workers"]:::dataStyle
+
+    C[("claims.rds · 10k rows")]:::storeStyle
+    P[("partners.rds · 60")]:::storeStyle
+    E[("events.rds · ~50k")]:::storeStyle
+
+    SIM --> C & P & E
+
+    S1["01 · Descriptive KPIs\nNetwork overview · EDA · Heatmap"]:::stageStyle
+    S2["02 · Fair Benchmarking\nGamma GLM · O/E ratios · lme4"]:::stageStyle
+    S3["03 · Causal Steering\nIPW · AIPW · CATE · Causal forest"]:::stageStyle
+    S4["04 · Partner Ranking\nComposite score · XGBoost · CatBoost"]:::stageStyle
+
+    C & P & E --> S1
+    C --> S2 & S3 & S4
+    S1 --> S2 --> S3 --> S4
+
+    R1["Descriptive Report"]:::outputStyle
+    R2["Benchmarking Report"]:::outputStyle
+    R3["Causal Report"]:::outputStyle
+    R4["Ranking Report"]:::outputStyle
+    DB["Interactive Dashboard · Shiny"]:::dashStyle
+
+    S1 --> R1
+    S2 --> R2
+    S3 --> R3
+    S4 --> R4
+    S4 --> DB
+```
+
 :::: {.columns}
 ::: {.column width="50%"}
 

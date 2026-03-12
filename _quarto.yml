@@ -9,7 +9,6 @@ project:
 website:
   title: "Motor Claims Partner Network"
   description: "ML Analysis of the Allianz Suisse Partner Network"
-  favicon: assets/favicon.ico
   navbar:
     left:
       - text: "Overview"
@@ -49,7 +48,6 @@ format:
     fig-dpi: 150
     df-print: paged
     highlight-style: github
-    css: assets/allianz.scss
     html-math-method: katex
     grid:
       sidebar-width: 0px
