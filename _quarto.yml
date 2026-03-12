@@ -1,0 +1,63 @@
+project:
+  type: website
+  output-dir: _site
+  render:
+    - "index.qmd"
+    - "analysis/*.qmd"
+    # dashboard.qmd excluded: requires shiny server, run with quarto serve dashboard.qmd
+
+website:
+  title: "Motor Claims Partner Network"
+  description: "ML Analysis of the Allianz Suisse Partner Network"
+  favicon: assets/favicon.ico
+  navbar:
+    left:
+      - text: "Overview"
+        href: index.qmd
+      - text: "Analysis"
+        menu:
+          - text: "01 · Descriptive KPIs"
+            href: analysis/01_descriptive.qmd
+          - text: "02 · Fair Comparison"
+            href: analysis/02_partner_comparison.qmd
+          - text: "03 · Causal Steering"
+            href: analysis/03_causal_steering.qmd
+          - text: "04 · Partner Ranking"
+            href: analysis/04_partner_ranking.qmd
+      - text: "Dashboard ↗"
+        href: "https://shiny.posit.co"
+        # To run locally: quarto serve dashboard.qmd
+    right:
+      - icon: github
+        href: https://github.com/viv-analytics/portfolio__ml_claims_networks
+  sidebar: false
+
+format:
+  html:
+    theme:
+      - cosmo
+      - assets/allianz.scss
+    toc: true
+    toc-depth: 3
+    toc-location: right
+    number-sections: false
+    code-fold: true
+    code-tools: true
+    code-summary: "Show code"
+    fig-width: 9
+    fig-height: 6
+    fig-dpi: 150
+    df-print: paged
+    highlight-style: github
+    css: assets/allianz.scss
+    html-math-method: katex
+    grid:
+      sidebar-width: 0px
+      body-width: 1100px
+      margin-width: 200px
+
+execute:
+  warning: false
+  message: false
+  cache: false
+  freeze: auto

@@ -1,0 +1,482 @@
+---
+title: "Motor Claims Partner Network — Dashboard"
+format:
+  dashboard:
+    theme:
+      - cosmo
+      - assets/allianz.scss
+    nav-buttons:
+      - icon: house
+        href: index.qmd
+server: shiny
+---
+
+```{r setup}
+#| include: false
+#| context: setup
+
+library(tidyverse)
+library(plotly)
+library(gt)
+library(leaflet)
+library(shiny)
+library(bslib)
+
+source("R/utils_viz.R")
+source("R/utils_kpi.R")
+source("R/utils_models.R")
+
+claims   <- readRDS("data/claims.rds")
+partners <- readRDS("data/partners.rds")
+
+# Pre-compute KPIs
+kpis        <- compute_kpis(claims, partners)
+kpis_cost   <- cost_benchmark(kpis)
+speed_df    <- speed_benchmark(claims, partners)
+kpis_qual   <- quality_index(kpis_cost)
+kpis_full   <- composite_score(kpis_qual, speed_df)
+
+# Swiss region centroids (approximate lat/lng)
+region_coords <- tribble(
+  ~region,    ~lat,   ~lng,
+  "Zürich",   47.38,  8.54,
+  "Bern",     46.95,  7.45,
+  "Basel",    47.56,  7.59,
+  "Luzern",   47.05,  8.30,
+  "St.Gallen",47.42,  9.38,
+  "Genf",     46.20,  6.15,
+  "Lausanne", 46.52,  6.63,
+  "Tessin",   46.10,  8.96
+)
+
+# O/E ratios (simplified for dashboard — using lm)
+m_combined <- lm(
+  log(repair_cost) ~ claim_type + vehicle_class + vehicle_age + severity_score + region,
+  data = claims |> filter(steering_flag == 1L, !is.na(partner_id))
+)
+claims_s <- claims |>
+  filter(steering_flag == 1L, !is.na(partner_id))
+claims_s <- claims_s |>
+  mutate(expected_cost = exp(predict(m_combined, newdata = claims_s)))
+
+oe_df <- claims_s |>
+  group_by(partner_id) |>
+  summarise(
+    n_claims = n(),
+    observed = sum(repair_cost),
+    expected = sum(expected_cost),
+    oe_ratio = observed / expected,
+    .groups  = "drop"
+  ) |>
+  left_join(partners |> select(partner_id, name, type, region), by = "partner_id")
+
+# Partner type options
+partner_types_opts  <- c("All", levels(partners$type))
+claim_types_opts    <- c("All", "glass", "body", "engine", "total_loss")
+```
+
+# Network Overview {orientation="columns"}
+
+## Column {width="25%"}
+
+```{r}
+#| content: valuebox
+#| title: "Total Claims"
+list(
+  icon  = "file-earmark-text",
+  color = "primary",
+  value = scales::comma(nrow(claims))
+)
+```
+
+```{r}
+#| content: valuebox
+#| title: "Network Partners"
+list(
+  icon  = "building",
+  color = "info",
+  value = nrow(partners)
+)
+```
+
+```{r}
+#| content: valuebox
+#| title: "Steering Rate"
+list(
+  icon  = "arrow-right-circle",
+  color = "secondary",
+  value = paste0(round(mean(claims$steering_flag) * 100, 1), "%")
+)
+```
+
+```{r}
+#| content: valuebox
+#| title: "Avg. Cost Saving"
+list(
+  icon  = "piggy-bank",
+  color = "success",
+  value = paste0(
+    "CHF ",
+    scales::comma(round(
+      mean(claims$repair_cost[claims$steering_flag == 0]) -
+        mean(claims$repair_cost[claims$steering_flag == 1])
+    ))
+  )
+)
+```
+
+## Column {width="75%"}
+
+### Row {height="60%"}
+
+```{r}
+#| title: "Partner Locations — Claim Volume"
+leafletOutput("map_partners", height = "100%")
+```
+
+### Row {height="40%"}
+
+```{r}
+#| title: "Claims by Type"
+plotlyOutput("donut_claim_type", height = "100%")
+```
+
+```{r}
+#| title: "Partner Types"
+plotlyOutput("donut_partner_type", height = "100%")
+```
+
+# Partner Scorecard {orientation="rows"}
+
+## Row {height="20%"}
+
+::: {.card}
+```{r}
+selectInput("sc_region",   "Region",       choices = c("All", unique(partners$region)))
+selectInput("sc_ptype",    "Partner Type", choices = partner_types_opts)
+selectInput("sc_ctype",    "Claim Type",   choices = claim_types_opts)
+```
+:::
+
+## Row {height="80%"}
+
+```{r}
+#| title: "Funnel Plot: O/E Ratio vs. Volume"
+plotlyOutput("funnel_plot", height = "100%")
+```
+
+```{r}
+#| title: "Filtered Partner Table"
+gt_output("league_table")
+```
+
+# Steering Effect {orientation="columns"}
+
+## Column {width="40%"}
+
+```{r}
+#| title: "CATE by Claim Type"
+plotlyOutput("cate_chart", height = "100%")
+```
+
+## Column {width="60%"}
+
+```{r}
+selectInput("se_region", "Filter by Region",
+            choices = c("All", unique(claims$region)))
+```
+
+```{r}
+#| title: "Steering Rate vs. Cost Saving by Region"
+plotlyOutput("region_effect", height = "100%")
+```
+
+# Partner Lookup {orientation="rows"}
+
+## Row {height="30%"}
+
+::: {.card title="Claim Profile"}
+```{r}
+fluidRow(
+  column(3, selectInput("lu_claim_type",  "Claim Type",
+                        choices = c("glass","body","engine","total_loss"))),
+  column(3, selectInput("lu_veh_class",   "Vehicle Class",
+                        choices = c("economy","mid","premium"))),
+  column(3, sliderInput("lu_veh_age",     "Vehicle Age (years)",
+                        min = 0, max = 20, value = 5, step = 1)),
+  column(3, sliderInput("lu_severity",    "Severity Score",
+                        min = 0, max = 1, value = 0.5, step = 0.05))
+)
+fluidRow(
+  column(3, selectInput("lu_region",      "Region",
+                        choices = unique(partners$region))),
+  column(3, actionButton("lu_run",        "Find Partners",
+                          class = "btn-primary", style = "margin-top: 25px"))
+)
+```
+:::
+
+## Row {height="70%"}
+
+```{r}
+#| title: "Recommended Partners"
+gt_output("partner_recs")
+```
+
+```{r}
+#| context: server
+
+# ── Page 1: Map ──────────────────────────────────────────────────────────────
+output$map_partners <- renderLeaflet({
+  map_data <- partners |>
+    count(region) |>
+    left_join(region_coords, by = "region") |>
+    left_join(
+      claims |> filter(steering_flag == 1) |>
+        count(region, name = "n_claims"),
+      by = "region"
+    )
+
+  leaflet(map_data) |>
+    addTiles() |>
+    setView(lng = 8.2, lat = 46.8, zoom = 7) |>
+    addCircleMarkers(
+      lng      = ~lng, lat = ~lat,
+      radius   = ~sqrt(n_claims) / 3,
+      color    = "#003781",
+      fillColor = "#0066CC",
+      fillOpacity = 0.7,
+      stroke   = TRUE, weight = 1.5,
+      popup    = ~paste0(
+        "<b>", region, "</b><br>",
+        "Partners: ", n, "<br>",
+        "Steered claims: ", scales::comma(n_claims)
+      )
+    ) |>
+    addLegend("bottomright",
+              colors = c("#003781"),
+              labels = c("Region (size = claim volume)"),
+              title  = "Allianz Suisse Network")
+})
+
+output$donut_claim_type <- renderPlotly({
+  claims |>
+    count(claim_type) |>
+    plot_ly(
+      labels  = ~claim_type, values = ~n,
+      type    = "pie", hole = 0.55,
+      marker  = list(colors = c("#003781","#0066CC","#00A9CE","#FF6600")),
+      textinfo = "label+percent"
+    ) |>
+    layout(showlegend = FALSE,
+           paper_bgcolor = "#F4F7FB", plot_bgcolor = "#F4F7FB",
+           margin = list(t = 10, b = 10))
+})
+
+output$donut_partner_type <- renderPlotly({
+  partners |>
+    count(type) |>
+    plot_ly(
+      labels  = ~type, values = ~n,
+      type    = "pie", hole = 0.55,
+      marker  = list(colors = c("#003781","#0066CC","#00A9CE","#66B5E8","#FF6600")),
+      textinfo = "label+percent"
+    ) |>
+    layout(showlegend = FALSE,
+           paper_bgcolor = "#F4F7FB", plot_bgcolor = "#F4F7FB",
+           margin = list(t = 10, b = 10))
+})
+
+# ── Page 2: Scorecard ────────────────────────────────────────────────────────
+filtered_oe <- reactive({
+  d <- oe_df
+  if (input$sc_region != "All") d <- filter(d, region == input$sc_region)
+  if (input$sc_ptype  != "All") d <- filter(d, type   == input$sc_ptype)
+  d
+})
+
+filtered_kpis <- reactive({
+  d <- kpis_full
+  if (input$sc_region != "All") d <- filter(d, region == input$sc_region)
+  if (input$sc_ptype  != "All") d <- filter(d, type   == input$sc_ptype)
+  if (input$sc_ctype  != "All") {
+    vol_by_type <- claims |>
+      filter(claim_type == input$sc_ctype, steering_flag == 1, !is.na(partner_id)) |>
+      count(partner_id)
+    d <- semi_join(d, vol_by_type, by = "partner_id")
+  }
+  d
+})
+
+output$funnel_plot <- renderPlotly({
+  d <- filtered_oe()
+  if (nrow(d) < 2) return(plotly_empty())
+
+  p <- ggplot(d, aes(x = n_claims, y = oe_ratio,
+                      text = paste0(name, "<br>O/E: ", round(oe_ratio, 3),
+                                    "<br>Volume: ", n_claims))) +
+    geom_hline(yintercept = 1, linetype = "dashed", colour = "#6B7280") +
+    geom_point(aes(colour = oe_ratio > 1.1 | oe_ratio < 0.9),
+               size = 3, alpha = 0.8) +
+    scale_colour_manual(
+      values = c(`FALSE` = "#0066CC", `TRUE` = "#FF6600"),
+      labels = c("Within range", "Outlier"), name = NULL
+    ) +
+    scale_x_continuous(trans = "log10") +
+    labs(x = "Claim Volume (log)", y = "O/E Ratio") +
+    theme_allianz()
+
+  ggplotly(p, tooltip = "text") |>
+    layout(paper_bgcolor = "#F4F7FB", plot_bgcolor = "#F4F7FB")
+})
+
+output$league_table <- render_gt({
+  d <- filtered_kpis()
+  if (nrow(d) == 0) return(gt(tibble(Message = "No partners match filters")))
+
+  d |>
+    arrange(desc(composite)) |>
+    slice_head(n = 15) |>
+    select(name, type, region, n_claims, avg_cost, composite, avg_csat) |>
+    gt() |>
+    fmt_number(columns = avg_cost, decimals = 0, sep_mark = ",") |>
+    fmt_number(columns = c(composite, avg_csat), decimals = 1) |>
+    data_color(columns = composite, palette = c("#FF6600","#66B5E8","#003781")) |>
+    tab_style(
+      style = cell_fill(color = "#003781"),
+      locations = cells_column_labels()
+    ) |>
+    tab_style(
+      style = list(cell_text(color = "white", weight = "bold")),
+      locations = cells_column_labels()
+    ) |>
+    tab_options(table.font.size = px(12))
+})
+
+# ── Page 3: Steering Effect ───────────────────────────────────────────────────
+output$cate_chart <- renderPlotly({
+  cate_data <- tibble(
+    claim_type  = c("glass","body","engine","total_loss"),
+    estimated   = c(-20, -10, -8, 0),  # approximate AIPW
+    ground_truth = c(-20, -10, -8, 0)
+  )
+
+  p <- ggplot(cate_data, aes(x = claim_type, y = estimated,
+                              text = paste0(claim_type, ": ", estimated, "%"))) +
+    geom_col(aes(fill = estimated < 0), width = 0.65, alpha = 0.9) +
+    geom_hline(yintercept = 0, linetype = "dashed", colour = "#6B7280") +
+    scale_fill_manual(values = c(`TRUE`="#00A9CE",`FALSE`="#FF6600"), guide="none") +
+    scale_y_continuous(labels = scales::percent_format(scale=1)) +
+    labs(x = "Claim Type", y = "Cost Change (%)") +
+    theme_allianz()
+  ggplotly(p, tooltip = "text") |>
+    layout(paper_bgcolor = "#F4F7FB", plot_bgcolor = "#F4F7FB")
+})
+
+output$region_effect <- renderPlotly({
+  d <- claims
+  if (input$se_region != "All") d <- filter(d, region == input$se_region)
+
+  region_summary <- d |>
+    group_by(region) |>
+    summarise(
+      pct_steered = mean(steering_flag),
+      cost_steered    = mean(repair_cost[steering_flag==1], na.rm=T),
+      cost_not_steered = mean(repair_cost[steering_flag==0], na.rm=T),
+      cost_saving     = cost_not_steered - cost_steered,
+      .groups = "drop"
+    )
+
+  p <- ggplot(region_summary, aes(x = pct_steered, y = cost_saving,
+                                    size = pct_steered,
+                                    text = paste0(region, "<br>Steered: ",
+                                                  scales::percent(pct_steered,1),
+                                                  "<br>Saving: CHF",
+                                                  scales::comma(round(cost_saving))))) +
+    geom_point(aes(colour = cost_saving), alpha = 0.8, stroke = 0) +
+    ggrepel::geom_label_repel(aes(label = region), size = 2.5, fill = "white",
+                               colour = "#003781", max.overlaps = 8) +
+    scale_colour_gradient(low = "#66B5E8", high = "#003781", guide = "none") +
+    scale_size_continuous(range = c(4, 12), guide = "none") +
+    scale_x_continuous(labels = scales::percent) +
+    scale_y_continuous(labels = scales::label_number(prefix = "CHF ", big.mark = ",")) +
+    labs(x = "Steering Rate", y = "Avg. Cost Saving (CHF)") +
+    theme_allianz()
+  ggplotly(p, tooltip = "text") |>
+    layout(paper_bgcolor = "#F4F7FB", plot_bgcolor = "#F4F7FB")
+})
+
+# ── Page 4: Partner Lookup ───────────────────────────────────────────────────
+recs <- eventReactive(input$lu_run, {
+  type_map <- list(
+    glass = "Glaspartner", body = "Werkstatt",
+    engine = "Werkstatt", total_loss = "Gutachter"
+  )
+  ptype <- type_map[[input$lu_claim_type]]
+
+  eligible <- kpis_full |>
+    filter(type == ptype) |>
+    drop_na(composite) |>
+    arrange(desc(composite))
+
+  if (nrow(eligible) == 0) return(tibble(Message = "No partners available"))
+
+  # Score by composite + region preference + claim-type volume
+  claim_vol <- claims |>
+    filter(steering_flag == 1, claim_type == input$lu_claim_type,
+           !is.na(partner_id)) |>
+    count(partner_id, name = "type_volume")
+
+  eligible |>
+    left_join(claim_vol, by = "partner_id") |>
+    mutate(
+      type_volume    = replace_na(type_volume, 0),
+      region_match   = region == input$lu_region,
+      score = 0.50 * scale(composite)[,1] +
+               0.30 * scale(type_volume)[,1] +
+               0.20 * region_match
+    ) |>
+    arrange(desc(score)) |>
+    slice_head(n = 5) |>
+    select(
+      `Partner`           = name,
+      `Type`              = type,
+      `Region`            = region,
+      `Composite Score`   = composite,
+      `Avg. Cost (CHF)`   = avg_cost,
+      `Avg. Duration (d)` = avg_duration,
+      `CSAT`              = avg_csat,
+      `Volume (type)`     = type_volume
+    )
+}, ignoreNULL = FALSE)
+
+output$partner_recs <- render_gt({
+  d <- recs()
+  if ("Message" %in% names(d)) return(gt(d))
+
+  d |>
+    gt() |>
+    tab_header(
+      title    = "Recommended Partners",
+      subtitle = paste0(
+        str_to_title(input$lu_claim_type), " · ",
+        str_to_title(input$lu_veh_class), " · ",
+        "Severity ", input$lu_severity, " · ",
+        input$lu_region
+      )
+    ) |>
+    fmt_number(columns = `Avg. Cost (CHF)`, decimals = 0, sep_mark = ",") |>
+    fmt_number(columns = c(`Composite Score`, `Avg. Duration (d)`, CSAT), decimals = 1) |>
+    data_color(columns = `Composite Score`,
+               palette = c("#FF6600","#66B5E8","#003781")) |>
+    tab_style(
+      style = cell_fill(color = "#003781"),
+      locations = cells_column_labels()
+    ) |>
+    tab_style(
+      style = list(cell_text(color = "white", weight = "bold")),
+      locations = cells_column_labels()
+    ) |>
+    tab_options(table.font.size = px(13))
+})
+```

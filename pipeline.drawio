@@ -1,0 +1,131 @@
+<mxfile host="app.diagrams.net" modified="2024-01-01T00:00:00.000Z" agent="Claude" version="21.0.0">
+  <diagram name="Analytical Pipeline" id="motor-claims-pipeline">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- SWIMLANE LABELS -->
+        <mxCell id="lane-data" value="Data Layer" style="swimlane;startSize=30;horizontal=0;fillColor=#003781;fontColor=#FFFFFF;strokeColor=#003781;fontSize=13;fontStyle=1;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="120" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-analysis" value="Analysis Layer" style="swimlane;startSize=30;horizontal=0;fillColor=#0066CC;fontColor=#FFFFFF;strokeColor=#0066CC;fontSize=13;fontStyle=1;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="40" y="380" width="120" height="380" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-output" value="Output Layer" style="swimlane;startSize=30;horizontal=0;fillColor=#00A9CE;fontColor=#FFFFFF;strokeColor=#00A9CE;fontSize=13;fontStyle=1;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="40" y="800" width="120" height="200" as="geometry" />
+        </mxCell>
+
+        <!-- DATA LAYER NODES -->
+        <mxCell id="simulate" value="00_simulate_data.R&#xa;(mirai · 4 workers)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#003781;fontColor=#FFFFFF;strokeColor=#002060;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="220" y="80" width="200" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="claims-rds" value="claims.rds&#xa;(10,000 rows)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#DAEAF7;strokeColor=#003781;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="500" y="60" width="130" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="partners-rds" value="partners.rds&#xa;(60 partners)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#DAEAF7;strokeColor=#003781;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="660" y="60" width="130" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="events-rds" value="process_events.rds&#xa;(~50,000 rows)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#DAEAF7;strokeColor=#003781;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="820" y="60" width="130" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="utils-kpi" value="utils_kpi.R" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF3FA;strokeColor=#003781;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="500" y="200" width="120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="utils-viz" value="utils_viz.R&#xa;theme_allianz()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF3FA;strokeColor=#003781;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="640" y="200" width="120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="utils-models" value="utils_models.R" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF3FA;strokeColor=#003781;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="780" y="200" width="120" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ANALYSIS LAYER NODES -->
+        <mxCell id="stage1" value="Stage 1&#xa;01_descriptive.qmd&#xa;KPI Dashboard · EDA&#xa;Network maps · Heatmaps" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0066CC;fontColor=#FFFFFF;strokeColor=#004D99;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="220" y="420" width="160" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="stage2" value="Stage 2&#xa;02_partner_comparison.qmd&#xa;Case-mix GLM · O/E Ratios&#xa;lme4 · Funnel Plot&#xa;(mirai bootstrap CIs)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0066CC;fontColor=#FFFFFF;strokeColor=#004D99;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="420" y="420" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="stage3" value="Stage 3&#xa;03_causal_steering.qmd&#xa;IPW / AIPW · CATE&#xa;marginaleffects&#xa;(mirai AIPW bootstrap)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0066CC;fontColor=#FFFFFF;strokeColor=#004D99;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="630" y="420" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="stage4" value="Stage 4&#xa;04_partner_ranking.qmd&#xa;Composite KPI Score&#xa;XGBoost · Case Lookup&#xa;(mirai CV folds)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0066CC;fontColor=#FFFFFF;strokeColor=#004D99;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="840" y="420" width="170" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- OUTPUT LAYER NODES -->
+        <mxCell id="report1" value="Descriptive Report" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00A9CE;fontColor=#FFFFFF;strokeColor=#007A99;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="220" y="840" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="report2" value="Benchmarking Report" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00A9CE;fontColor=#FFFFFF;strokeColor=#007A99;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="380" y="840" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="report3" value="Causal Report" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00A9CE;fontColor=#FFFFFF;strokeColor=#007A99;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="540" y="840" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="report4" value="Ranking Report" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00A9CE;fontColor=#FFFFFF;strokeColor=#007A99;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="700" y="840" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="dashboard" value="Interactive Dashboard&#xa;(Shiny Runtime)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FF6600;fontColor=#FFFFFF;strokeColor=#CC5200;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="870" y="840" width="150" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ARROWS: simulate → data stores -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#003781;strokeWidth=2;" edge="1" source="simulate" target="claims-rds" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#003781;strokeWidth=2;" edge="1" source="simulate" target="partners-rds" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#003781;strokeWidth=2;" edge="1" source="simulate" target="events-rds" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ARROWS: data → stages -->
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6B7280;strokeWidth=1.5;dashed=1;" edge="1" source="claims-rds" target="stage1" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6B7280;strokeWidth=1.5;dashed=1;" edge="1" source="claims-rds" target="stage2" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6B7280;strokeWidth=1.5;dashed=1;" edge="1" source="claims-rds" target="stage3" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6B7280;strokeWidth=1.5;dashed=1;" edge="1" source="claims-rds" target="stage4" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ARROWS: stages → outputs -->
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#00A9CE;strokeWidth=2;" edge="1" source="stage1" target="report1" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#00A9CE;strokeWidth=2;" edge="1" source="stage2" target="report2" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#00A9CE;strokeWidth=2;" edge="1" source="stage3" target="report3" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#00A9CE;strokeWidth=2;" edge="1" source="stage4" target="report4" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF6600;strokeWidth=2;" edge="1" source="stage4" target="dashboard" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Stage flow arrows -->
+        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#0066CC;strokeWidth=2;" edge="1" source="stage1" target="stage2" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#0066CC;strokeWidth=2;" edge="1" source="stage2" target="stage3" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#0066CC;strokeWidth=2;" edge="1" source="stage3" target="stage4" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

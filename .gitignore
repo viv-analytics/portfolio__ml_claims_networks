@@ -1,0 +1,22 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# Generated data (run 00_simulate_data.R to reproduce)
+data/
+
+# Generated outputs
+outputs/figures/
+outputs/tables/
+
+# Quarto generated site (deployed via gh-pages branch)
+_site/
+# _freeze/ is committed so CI can render without re-running R
+
+# OS files
+.DS_Store
+Thumbs.db
+
+/.quarto/
+**/*.quarto_ipynb
