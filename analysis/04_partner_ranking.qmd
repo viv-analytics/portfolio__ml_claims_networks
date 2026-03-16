@@ -330,33 +330,37 @@ recommend_partners <- function(
 
   if (nrow(eligible) == 0) return(tibble())
 
-  # Build prediction grid: claim profile × each eligible partner
-  pred_grid <- eligible |>
-    select(partner_id, name, composite, avg_duration, avg_csat, reopen_rate, n_claims) |>
-    mutate(
-      claim_type_n    = as.integer(factor(claim_profile$claim_type,
-                                          levels = c("glass","body","engine","total_loss"))),
-      vehicle_class_n = as.integer(factor(claim_profile$vehicle_class,
-                                          levels = c("economy","mid","premium"))),
-      vehicle_age     = claim_profile$vehicle_age,
-      severity_score  = claim_profile$severity_score
-    )
-
-  pred_baked <- tryCatch(
-    bake(recipe_prep, new_data = pred_grid),
-    error = function(e) NULL
+  # The XGBoost model uses claim-level features only (no partner aggregates),
+  # so it produces one expected cost estimate for the claim profile.
+  # Partner ranking is driven by composite score + region match.
+  claim_row <- tibble(
+    claim_type             = claim_profile$claim_type,
+    vehicle_class          = claim_profile$vehicle_class,
+    vehicle_age            = claim_profile$vehicle_age,
+    severity_score         = claim_profile$severity_score,
+    ncd_class              = 3L,              # typical NCD for lookup
+    deductible_amount      = 500,
+    notification_delay_days = 1,
+    coverage_type          = "Vollkasko",
+    fault_indicator        = "at_fault"
   )
-  if (is.null(pred_baked)) return(eligible |> slice_max(composite, n = top_n))
 
-  preds <- predict(xgb_model, new_data = pred_baked)$.pred
-  pred_grid |>
+  predicted_cost <- tryCatch({
+    baked <- bake(recipe_prep, new_data = claim_row)
+    round(predict(xgb_model, new_data = baked)$.pred, 0)
+  }, error = function(e) NA_real_)
+
+  eligible |>
     mutate(
-      predicted_cost  = round(preds, 0),
-      recommendation_score = 0.6 * (1 - scale(preds)[,1]) + 0.4 * scale(composite)[,1]
+      est_cost         = predicted_cost,
+      region_match     = region == claim_profile$region,
+      recommendation_score = 0.6 * scale(composite)[,1] +
+                             0.3 * scale(n_claims)[,1] +
+                             0.1 * as.numeric(region_match)
     ) |>
     arrange(desc(recommendation_score)) |>
     slice_head(n = top_n) |>
-    select(partner_id, name, predicted_cost, composite,
+    select(partner_id, name, region, est_cost, composite,
            avg_duration, avg_csat, recommendation_score)
 }
 ```
@@ -387,7 +391,7 @@ recommendations |>
     title    = "Partner Recommendations",
     subtitle = "Glass damage · Economy vehicle · Severity 0.75 · Zürich"
   ) |>
-  fmt_number(columns = predicted_cost, decimals = 0, sep_mark = ",",
+  fmt_number(columns = est_cost, decimals = 0, sep_mark = ",",
              pattern = "CHF {x}") |>
   fmt_number(columns = c(composite, avg_duration, avg_csat, recommendation_score),
              decimals = 1) |>
@@ -477,7 +481,7 @@ model_data_raw <- claims_feat |>
 set.seed(2025)
 # Split first, then compute type medians from training data only.
 # Computing medians before the split leaks test-set information into labels.
-split    <- initial_split(model_data_raw, prop = 0.75, strata = cost_efficient_raw)
+split    <- initial_split(model_data_raw, prop = 0.75)
 train_df <- training(split)
 test_df  <- testing(split)
 
@@ -506,11 +510,13 @@ cat("Class balance (train):", round(prop.table(table(train_df$cost_efficient)) *
 ### Logistic Regression (baseline)
 
 ```{r logistic-regression}
-# Feature matrix
-feat_cols <- c("claim_type_n", "vehicle_class_n", "vehicle_age",
-               "severity_score", "composite", "avg_duration", "avg_csat", "reopen_rate")
-
-lr_recipe <- recipe(cost_efficient ~ ., data = train_df |> select(all_of(c(feat_cols, "cost_efficient")))) |>
+lr_recipe <- recipe(
+  cost_efficient ~ claim_type + vehicle_class + coverage_type + fault_indicator +
+    vehicle_age + severity_score + ncd_class + deductible_amount +
+    notification_delay_days,
+  data = train_df
+) |>
+  step_dummy(claim_type, vehicle_class, coverage_type, fault_indicator, one_hot = TRUE) |>
   step_normalize(all_numeric_predictors())
 
 # Tune the L1 penalty via 5-fold CV rather than hardcoding 0.01.
@@ -595,10 +601,13 @@ score_model <- function(preds_df, model_name) {
 
 # XGBoost as classifier: refit for binary outcome
 xgb_clf_recipe <- recipe(
-  cost_efficient ~ claim_type_n + vehicle_class_n + vehicle_age +
-    severity_score + composite + avg_duration + avg_csat + reopen_rate,
+  cost_efficient ~ claim_type + vehicle_class + coverage_type + fault_indicator +
+    vehicle_age + severity_score + ncd_class + deductible_amount +
+    notification_delay_days,
   data = train_df
-) |> step_normalize(all_numeric_predictors())
+) |>
+  step_dummy(claim_type, vehicle_class, coverage_type, fault_indicator, one_hot = TRUE) |>
+  step_normalize(all_numeric_predictors())
 
 xgb_clf_spec <- boost_tree(trees = 300, tree_depth = 4, learn_rate = 0.05) |>
   set_engine("xgboost") |>
