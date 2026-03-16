@@ -49,15 +49,19 @@ region_coords <- tribble(
   "Tessin",   46.10,  8.96
 )
 
-# O/E ratios (simplified for dashboard — using lm)
-m_combined <- lm(
-  log(repair_cost) ~ claim_type + vehicle_class + vehicle_age + severity_score + region,
-  data = claims |> filter(steering_flag == 1L, !is.na(partner_id))
-)
+# O/E ratios — Gamma GLM with log-link (consistent with Stage 2 analysis).
+# Using lm(log(cost)) and back-transforming with exp() would systematically
+# under-predict costs due to Jensen's inequality (exp(E[log Y]) < E[Y]).
 claims_s <- claims |>
   filter(steering_flag == 1L, !is.na(partner_id))
+
+m_combined <- glm(
+  repair_cost ~ claim_type + vehicle_class + vehicle_age + severity_score + region,
+  data   = claims_s,
+  family = Gamma(link = "log")
+)
 claims_s <- claims_s |>
-  mutate(expected_cost = exp(predict(m_combined, newdata = claims_s)))
+  mutate(expected_cost = predict(m_combined, newdata = claims_s, type = "response"))
 
 oe_df <- claims_s |>
   group_by(partner_id) |>
@@ -355,14 +359,20 @@ output$league_table <- render_gt({
 
 # ── Page 3: Steering Effect ───────────────────────────────────────────────────
 output$cate_chart <- renderPlotly({
-  cate_data <- tibble(
-    claim_type  = c("glass","body","engine","total_loss"),
-    estimated   = c(-20, -10, -8, 0),  # approximate AIPW
-    ground_truth = c(-20, -10, -8, 0)
-  )
+  # Load CATE estimates from Stage 3 analysis if available.
+  # Fallback: compute lightweight AIPW point estimates (no bootstrap).
+  # This avoids hard-coding ground truth values as if they were model outputs.
+  cate_data <- if (file.exists("data/cate_results.rds")) {
+    readRDS("data/cate_results.rds") |>
+      select(claim_type, estimated = cate_pct)
+  } else {
+    ps_res   <- fit_propensity(claims)
+    cate_live <- cate_by_segment(ps_res$data)
+    cate_live |> select(claim_type, estimated = cate_pct)
+  }
 
   p <- ggplot(cate_data, aes(x = claim_type, y = estimated,
-                              text = paste0(claim_type, ": ", estimated, "%"))) +
+                              text = paste0(claim_type, ": ", round(estimated, 1), "%"))) +
     geom_col(aes(fill = estimated < 0), width = 0.65, alpha = 0.9) +
     geom_hline(yintercept = 0, linetype = "dashed", colour = "#6B7280") +
     scale_fill_manual(values = c(`TRUE`="#00A9CE",`FALSE`="#FF6600"), guide="none") +

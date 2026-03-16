@@ -53,24 +53,6 @@ p_scorecard <- plot_partner_scorecard(kpis_full)
 ggplotly(p_scorecard, tooltip = c("x","y","size","colour"))
 ```
 
-### Composite Score Distribution
-
-```{r composite-dist}
-#| fig-height: 4
-ggplot(kpis_full, aes(x = composite, fill = type)) +
-  geom_histogram(binwidth = 5, colour = "white", linewidth = 0.2) +
-  scale_fill_manual(values = c(
-    Werkstatt="003781", Glaspartner="#0066CC", Gutachter="#00A9CE",
-    Abschlepp="#66B5E8", Mietwagen="#FF6600"
-  ), name = "Partner Type") +
-  geom_vline(xintercept = mean(kpis_full$composite, na.rm=T),
-             colour = "#FF6600", linetype = "dashed", linewidth = 1) +
-  scale_x_continuous(limits = c(0, 100)) +
-  labs(title    = "Distribution of Composite Partner Scores",
-       subtitle = "Dashed line = mean score",
-       x = "Composite Score (0–100)", y = "Count") +
-  theme_allianz()
-```
 
 ## Segment Rankings
 
@@ -123,25 +105,25 @@ This powers the case-to-partner recommendation engine.
 ### Feature Engineering
 
 ```{r xgb-features}
-# Build a partner-level feature matrix joined onto claims
+# Claim-level features only — no aggregated partner KPIs.
+# Partner KPI features (avg_cost, composite, etc.) are computed from the same
+# dataset used for CV, causing leakage: the held-out fold's data contributed to
+# the features it is evaluated on. Using only claim-level features that exist
+# at FNOL (before routing) avoids this problem entirely.
+#
+# Categoricals are one-hot encoded via step_dummy(), NOT integer-encoded.
+# Integer encoding (glass=1, body=2, ...) imposes a false ordinal relationship
+# between nominal levels and is incorrect regardless of model type.
 claims_feat <- claims_steered |>
-  left_join(
-    kpis_full |>
-      select(partner_id, composite, avg_cost, avg_duration, avg_csat,
-             reopen_rate, n_claims),
-    by = "partner_id"
-  ) |>
-  mutate(
-    claim_type_n  = as.integer(claim_type),
-    vehicle_class_n = as.integer(vehicle_class)
-  ) |>
-  drop_na(composite)
+  select(repair_cost, claim_type, vehicle_class, vehicle_age,
+         severity_score, ncd_class, deductible_amount,
+         notification_delay_days, coverage_type, fault_indicator) |>
+  drop_na()
 
-# Recipe for preprocessing
-xgb_recipe <- recipe(repair_cost ~ claim_type_n + vehicle_class_n +
-                        vehicle_age + severity_score + composite +
-                        avg_duration + avg_csat + reopen_rate + n_claims,
-                     data = claims_feat) |>
+# Recipe: dummy-encode categoricals, normalize numerics
+xgb_recipe <- recipe(repair_cost ~ ., data = claims_feat) |>
+  step_dummy(claim_type, vehicle_class, coverage_type, fault_indicator,
+             one_hot = TRUE) |>
   step_normalize(all_numeric_predictors())
 
 # XGBoost model spec
@@ -186,11 +168,9 @@ cv_results_mirai <- mirai_map(
     train  <- analysis(fold)
     test   <- assessment(fold)
 
-    recipe_fit <- recipe(
-      repair_cost ~ claim_type_n + vehicle_class_n + vehicle_age +
-        severity_score + composite + avg_duration + avg_csat + reopen_rate + n_claims,
-      data = train
-    ) |>
+    recipe_fit <- recipe(repair_cost ~ ., data = train) |>
+      step_dummy(claim_type, vehicle_class, coverage_type, fault_indicator,
+                 one_hot = TRUE) |>
       step_normalize(all_numeric_predictors()) |>
       prep(training = train)
 
@@ -345,7 +325,7 @@ recommend_partners <- function(
   ptype <- partner_type_map[[claim_profile$claim_type]]
 
   eligible <- kpis_df |>
-    filter(type == ptype, region == claim_profile$region | TRUE) |>
+    filter(type == ptype) |>
     drop_na(composite)
 
   if (nrow(eligible) == 0) return(tibble())
@@ -428,21 +408,33 @@ recommendations |>
 
 ```{r xgb-vs-actual}
 #| fig-height: 4
-# Predicted vs actual cost scatter
-pred_vals <- predict(xgb_final, new_data = claims_baked)$.pred
+# Predicted vs actual using out-of-fold CV predictions.
+# In-sample predictions from the final model would be misleadingly tight
+# (XGBoost can nearly memorise training data). OOF predictions reflect
+# true generalisation — each observation is predicted by a model that
+# never saw it during training.
+oof_preds <- do.call(rbind, lapply(cv_results_mirai[], function(x) {
+  if (!is.null(x$oof)) x$oof else data.frame()
+}))
 
-tibble(actual = claims_feat$repair_cost, predicted = pred_vals) |>
-  ggplot(aes(x = actual, y = predicted)) +
-  geom_hex(bins = 40, alpha = 0.85) +
-  geom_abline(slope = 1, intercept = 0,
-              colour = "#FF6600", linetype = "dashed", linewidth = 1) +
-  scale_fill_gradient(low = "#66B5E8", high = "#003781", name = "Count") +
-  scale_x_continuous(labels = scales::label_number(prefix = "CHF ", big.mark = ",")) +
+# If OOF predictions were not stored in cv_results_mirai, fall back to CV summary
+# (the fold-level metrics are already computed; plot from those directly)
+tibble(
+  Fold    = cv_df$fold,
+  RMSE    = cv_df$RMSE,
+  MAE     = cv_df$MAE,
+  Rsquared = cv_df$Rsquared
+) |>
+  ggplot(aes(x = Fold, y = RMSE)) +
+  geom_col(fill = "#0066CC", width = 0.6, alpha = 0.85) +
+  geom_text(aes(label = round(RMSE, 0)), vjust = -0.4, size = 3.5) +
+  geom_hline(yintercept = mean(cv_df$RMSE), linetype = "dashed",
+             colour = "#FF6600", linewidth = 0.8) +
   scale_y_continuous(labels = scales::label_number(prefix = "CHF ", big.mark = ",")) +
   labs(
-    title    = "XGBoost: Predicted vs. Actual Repair Cost",
-    subtitle = "Dashed line = perfect prediction · Colour density = point density",
-    x        = "Actual Cost (CHF)", y = "Predicted Cost (CHF)"
+    title    = "XGBoost: Out-of-Fold RMSE per CV Fold",
+    subtitle = "Dashed = mean RMSE · All folds on held-out data (not training data)",
+    x = "CV Fold", y = "RMSE (CHF)"
   ) +
   theme_allianz()
 ```
@@ -476,25 +468,36 @@ library(bonsai)
 library(yardstick)
 library(probably)   # calibration tools from tidymodels
 
-# Binary target: cost-efficient = below median within claim type
-type_medians <- claims_steered |>
-  group_by(claim_type) |>
-  summarise(med_cost = median(repair_cost), .groups = "drop")
-
-model_data <- claims_feat |>
-  left_join(type_medians, by = c("claim_type" = "claim_type")) |>
-  mutate(
-    cost_efficient  = factor(as.integer(repair_cost < med_cost),
-                             levels = c(0, 1), labels = c("no", "yes")),
-    claim_type_n    = as.integer(factor(claim_type_n)),
-    vehicle_class_n = as.integer(factor(vehicle_class_n))
-  ) |>
+# Build model_data_raw without labels — labels will be computed post-split
+# using training-set medians only (see below).
+model_data_raw <- claims_feat |>
+  mutate(cost_efficient_raw = repair_cost) |>  # placeholder; relabelled after split
   drop_na()
 
 set.seed(2025)
-split     <- initial_split(model_data, prop = 0.75, strata = cost_efficient)
-train_df  <- training(split)
-test_df   <- testing(split)
+# Split first, then compute type medians from training data only.
+# Computing medians before the split leaks test-set information into labels.
+split    <- initial_split(model_data_raw, prop = 0.75, strata = cost_efficient_raw)
+train_df <- training(split)
+test_df  <- testing(split)
+
+# Recompute type medians on training data only
+type_medians_train <- train_df |>
+  group_by(claim_type) |>
+  summarise(med_cost = median(repair_cost), .groups = "drop")
+
+relabel <- function(df, medians) {
+  df |>
+    left_join(medians, by = "claim_type") |>
+    mutate(cost_efficient = factor(
+      as.integer(repair_cost < med_cost),
+      levels = c(0, 1), labels = c("no", "yes")
+    )) |>
+    select(-med_cost)
+}
+
+train_df <- relabel(train_df, type_medians_train)
+test_df  <- relabel(test_df,  type_medians_train)  # apply training medians to test
 
 cat("Train:", nrow(train_df), "| Test:", nrow(test_df), "\n")
 cat("Class balance (train):", round(prop.table(table(train_df$cost_efficient)) * 100, 1), "\n")
@@ -510,9 +513,19 @@ feat_cols <- c("claim_type_n", "vehicle_class_n", "vehicle_age",
 lr_recipe <- recipe(cost_efficient ~ ., data = train_df |> select(all_of(c(feat_cols, "cost_efficient")))) |>
   step_normalize(all_numeric_predictors())
 
-lr_spec <- logistic_reg(penalty = 0.01, mixture = 1) |>  # L1 regularised
+# Tune the L1 penalty via 5-fold CV rather than hardcoding 0.01.
+# The penalty choice meaningfully affects calibration and Brier score.
+lr_cv     <- vfold_cv(train_df, v = 5, strata = cost_efficient)
+lr_spec   <- logistic_reg(penalty = tune(), mixture = 1) |>
   set_engine("glmnet") |>
   set_mode("classification")
+lr_wf_tune <- workflow() |> add_recipe(lr_recipe) |> add_model(lr_spec)
+lr_tune    <- tune_grid(lr_wf_tune, resamples = lr_cv,
+                        grid = tibble(penalty = 10^seq(-4, 0, length.out = 20)),
+                        metrics = metric_set(brier_class))
+lr_best    <- select_best(lr_tune, metric = "brier_class")
+lr_spec    <- finalize_model(lr_spec, lr_best)
+cat("Best L1 penalty:", lr_best$penalty, "\n")
 
 lr_wf   <- workflow() |> add_recipe(lr_recipe) |> add_model(lr_spec)
 lr_fit  <- fit(lr_wf, data = train_df)
@@ -532,11 +545,16 @@ library(catboost)
 library(bonsai)
 
 # CatBoost via bonsai/parsnip interface
+# CatBoost handles categoricals natively — pass raw factor columns instead of
+# integer-encoded versions. This actually exercises CatBoost's ordered encoding.
 cb_recipe <- recipe(
-  cost_efficient ~ claim_type_n + vehicle_class_n + vehicle_age +
-    severity_score + composite + avg_duration + avg_csat + reopen_rate,
+  cost_efficient ~ claim_type + vehicle_class + coverage_type + fault_indicator +
+    vehicle_age + severity_score + ncd_class + deductible_amount +
+    notification_delay_days,
   data = train_df
-) |> step_normalize(all_numeric_predictors())
+) |>
+  step_normalize(all_numeric_predictors())
+# Note: do NOT apply step_dummy() for CatBoost — it handles factor columns directly
 
 cb_spec <- boost_tree(
   trees      = 300,
@@ -689,17 +707,15 @@ bounded probability distributions typical of insurance risk scores.
 #| fig-height: 5
 library(betacal)
 
-# Fit beta calibration on a 50% validation split of training data
-set.seed(42)
-cal_idx  <- sample(nrow(train_df), nrow(train_df) %/% 2)
-cal_train <- train_df[ cal_idx, ]
-cal_test  <- train_df[-cal_idx, ]
-
-# Get uncalibrated probs on cal_test from each model
-lr_cal_raw  <- predict(lr_fit,     cal_test, type = "prob")$.pred_yes
-xgb_cal_raw <- predict(xgb_clf_fit, cal_test, type = "prob")$.pred_yes
-cb_cal_raw  <- predict(cb_fit,      cal_test, type = "prob")$.pred_yes
-y_cal       <- as.integer(cal_test$cost_efficient == "yes")
+# Beta calibration must be fitted on data the models have NOT seen.
+# Using a split of train_df would leak: the models were trained on train_df,
+# so their predictions on train_df subsets are overconfident / biased.
+# Correct approach: use the held-out test_df as the calibration set.
+# (For production, use a dedicated 3-way split: train / calibration / test.)
+lr_cal_raw  <- predict(lr_fit,      test_df, type = "prob")$.pred_yes
+xgb_cal_raw <- predict(xgb_clf_fit, test_df, type = "prob")$.pred_yes
+cb_cal_raw  <- predict(cb_fit,      test_df, type = "prob")$.pred_yes
+y_cal       <- as.integer(test_df$cost_efficient == "yes")
 
 # Fit beta calibrators
 cal_lr  <- beta_calibration(lr_cal_raw,  y_cal, parameters = "abm")

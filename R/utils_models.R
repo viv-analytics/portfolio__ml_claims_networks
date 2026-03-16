@@ -19,6 +19,11 @@ observed_vs_expected <- function(model, claims_steered) {
   claims_steered <- claims_steered |>
     mutate(expected_cost = predict(model, newdata = claims_steered, type = "response"))
 
+  # Empirical coefficient of variation: accounts for continuous (not count) cost data.
+  # Poisson limits (Spiegelhalter 2005) assume count data and produce wrong intervals for
+  # CHF costs. CV-based limits use the observed dispersion: SE(O/E) ≈ cv / sqrt(n_claims).
+  cv_cost <- sd(claims_steered$repair_cost) / mean(claims_steered$repair_cost)
+
   # Sum observed and expected per partner
   oe <- claims_steered |>
     group_by(partner_id) |>
@@ -30,10 +35,10 @@ observed_vs_expected <- function(model, claims_steered) {
     ) |>
     mutate(
       oe_ratio = observed / expected,
-      # Approximate Poisson control limits for funnel plot
-      # Based on Spiegelhalter (2005) method
-      oe_lower = 1 - 1.96 * sqrt(1 / expected) * (observed / expected),
-      oe_upper = 1 + 1.96 * sqrt(1 / expected) * (observed / expected)
+      # CV-based funnel limits: valid for Gamma-distributed continuous costs
+      oe_se    = cv_cost / sqrt(n_claims),
+      oe_lower = 1 - 1.96 * oe_se,
+      oe_upper = 1 + 1.96 * oe_se
     )
 
   oe
@@ -109,38 +114,49 @@ fit_propensity <- function(claims) {
 
 # -----------------------------------------------------------------------------
 # aipw_ate()
-# Augmented IPW (doubly robust) estimator for ATE of steering on log(cost)
-# Returns: scalar ATE estimate (multiplicative effect on cost scale)
+# Augmented IPW (doubly robust) estimator for ATE of steering on repair cost.
+# Outcome model: Gamma GLM with log-link (consistent with Stage 2 O/E model).
+# Using OLS on log(cost) would estimate E[log Y] and create Jensen's inequality
+# bias when back-transforming. Gamma GLM models E[Y] directly on the CHF scale.
+# Returns: list(ate_chf, ate_pct, phi1, phi0)
 # -----------------------------------------------------------------------------
 aipw_ate <- function(claims_ps) {
-  d <- claims_ps |>
-    mutate(log_cost = log(repair_cost))
+  d <- claims_ps
 
-  # Outcome model: E[Y | X, A]
-  m1 <- lm(log_cost ~ claim_type + vehicle_class + severity_score + region +
-              steering_flag,
-            data = d)
+  # Outcome model: E[cost | X, A] — Gamma GLM with log-link
+  m_out <- tryCatch(
+    glm(repair_cost ~ claim_type + vehicle_class + severity_score + region +
+          steering_flag,
+        data   = d,
+        family = Gamma(link = "log")),
+    error = function(e) {
+      warning("Gamma GLM failed, falling back to log-Gaussian: ", e$message)
+      glm(repair_cost ~ claim_type + vehicle_class + severity_score + region +
+            steering_flag,
+          data   = d,
+          family = gaussian(link = "log"))
+    }
+  )
 
-  mu1 <- predict(m1, newdata = mutate(d, steering_flag = 1L))
-  mu0 <- predict(m1, newdata = mutate(d, steering_flag = 0L))
+  mu1 <- predict(m_out, newdata = mutate(d, steering_flag = 1L), type = "response")
+  mu0 <- predict(m_out, newdata = mutate(d, steering_flag = 0L), type = "response")
 
-  # AIPW estimator
+  # AIPW doubly-robust correction on the original CHF scale
   A    <- d$steering_flag
-  Y    <- d$log_cost
+  Y    <- d$repair_cost
   ps   <- d$ps
-  ipw  <- d$trim_ipw
 
-  phi1 <- A / ps   * (Y - mu1) + mu1
-  phi0 <- (1-A)/(1-ps) * (Y - mu0) + mu0
+  phi1 <- A / ps         * (Y - mu1) + mu1
+  phi0 <- (1 - A) / (1 - ps) * (Y - mu0) + mu0
 
-  ate_log <- mean(phi1) - mean(phi0)
-  ate_pct <- (exp(ate_log) - 1) * 100
+  ate_chf <- mean(phi1) - mean(phi0)
+  ate_pct <- (mean(phi1) / mean(phi0) - 1) * 100
 
   list(
-    ate_log   = ate_log,
-    ate_pct   = ate_pct,
-    phi1      = phi1,
-    phi0      = phi0
+    ate_chf = ate_chf,
+    ate_pct = ate_pct,
+    phi1    = phi1,
+    phi0    = phi0
   )
 }
 
@@ -152,8 +168,7 @@ aipw_ate <- function(claims_ps) {
 cate_by_segment <- function(claims_ps) {
   types <- levels(claims_ps$claim_type)
   map_dfr(types, function(ct) {
-    d <- filter(claims_ps, claim_type == ct) |>
-      mutate(log_cost = log(repair_cost))
+    d <- filter(claims_ps, claim_type == ct)
 
     if (n_distinct(d$steering_flag) < 2) {
       return(tibble(claim_type = ct, cate_pct = NA_real_, n = nrow(d)))

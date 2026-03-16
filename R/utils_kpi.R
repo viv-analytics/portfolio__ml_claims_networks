@@ -11,6 +11,10 @@ library(tidyverse)
 # Returns: tibble with partner_id + 8 KPI columns
 # -----------------------------------------------------------------------------
 compute_kpis <- function(claims, partners) {
+  # NOTE: KPIs are computed on steered claims only (steering_flag == 1).
+  # Non-steered claims are excluded intentionally — this function describes
+  # partner performance in the steered population. For causal comparisons
+  # between steered and non-steered claims, use aipw_ate() / cate_by_segment().
   kpis <- claims |>
     filter(!is.na(partner_id), steering_flag == 1L) |>
     group_by(partner_id) |>
@@ -101,7 +105,9 @@ speed_benchmark <- function(claims, partners) {
 quality_index <- function(kpis) {
   kpis |>
     mutate(
-      csat_norm    = (avg_csat - 1) / 9,
+      # Clip before normalising: simulation noise can push avg_csat outside [1,10],
+      # which would produce csat_norm outside [0,1] and corrupt quality_idx.
+      csat_norm    = pmax(0, pmin(1, (avg_csat - 1) / 9)),
       quality_idx  = 0.6 * csat_norm + 0.4 * (1 - reopen_rate),
       quality_label = case_when(
         quality_idx > 0.80 ~ "Excellent",

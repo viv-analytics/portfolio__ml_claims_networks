@@ -107,6 +107,55 @@ plot(gg_ps) +
   theme_allianz()
 ```
 
+### Overlap (Positivity) Diagnostic
+
+Before computing IPW weights, check for positivity violations. AIPW requires
+`0 < P(treated | X) < 1` for all covariate combinations; near-zero or near-one
+propensity scores inflate IPW weights and destabilise the doubly-robust correction.
+
+```{r overlap-diagnostic}
+overlap_check <- claims_ps |>
+  group_by(claim_type) |>
+  summarise(
+    n              = n(),
+    pct_ps_low     = mean(ps < 0.05) * 100,   # near-zero: almost never steered
+    pct_ps_high    = mean(ps > 0.95) * 100,   # near-one:  almost always steered
+    max_trim_ipw   = max(trim_ipw),
+    median_trim_ipw = median(trim_ipw),
+    .groups = "drop"
+  )
+
+overlap_check |>
+  gt() |>
+  tab_header(
+    title    = "Propensity Score Overlap Diagnostics",
+    subtitle = "Rows with PS < 0.05 or > 0.95 signal potential positivity violations"
+  ) |>
+  fmt_number(columns = c(pct_ps_low, pct_ps_high), decimals = 1, suffix = "%") |>
+  fmt_number(columns = c(max_trim_ipw, median_trim_ipw), decimals = 2) |>
+  tab_style(
+    style = cell_fill(color = "#FFE0CC"),
+    locations = cells_body(
+      rows = pct_ps_low > 5 | pct_ps_high > 5
+    )
+  ) |>
+  tab_style(
+    style = cell_fill(color = "#003781"),
+    locations = cells_column_labels()
+  ) |>
+  tab_style(
+    style = list(cell_text(color = "white", weight = "bold")),
+    locations = cells_column_labels()
+  ) |>
+  tab_options(table.font.size = px(13))
+```
+
+::: {.callout-warning}
+If `pct_ps_low` or `pct_ps_high` exceeds ~5% for any segment, AIPW estimates
+for that segment should be interpreted with caution. The 99th-percentile trimming
+of IPW weights (`trim_ipw`) mitigates but does not eliminate the instability.
+:::
+
 ## IPW / AIPW Estimators
 
 ### WeightIt: Stabilised IPW
@@ -168,8 +217,8 @@ outcome model is correctly specified — providing valuable insurance against mo
 ```{r aipw-estimate}
 # Point estimate
 ate_result <- aipw_ate(claims_ps)
-cat(sprintf("AIPW ATE: %.1f%% (log scale: %.4f)\n",
-            ate_result$ate_pct, ate_result$ate_log))
+cat(sprintf("AIPW ATE: %.1f%% (CHF difference: %.0f)\n",
+            ate_result$ate_pct, ate_result$ate_chf))
 ```
 
 ### Bootstrap CIs for AIPW (500 resamples via mirai)
@@ -264,6 +313,9 @@ cate_df <- do.call(rbind, lapply(cate_results_mirai[], function(x) {
   as_tibble()
 
 daemons(0)
+
+# Persist CATE results for the Shiny dashboard (avoids hard-coded values there)
+saveRDS(cate_df, "../data/cate_results.rds")
 ```
 
 ```{r cate-plot}
@@ -331,9 +383,17 @@ p_region <- ggplot(cate_region, aes(x = reorder(region, cate_pct), y = cate_pct,
 ggplotly(p_region)
 ```
 
-## marginaleffects: Average Comparisons
+## Sensitivity Check: marginaleffects (OLS baseline)
+
+The AIPW and causal forest above are the primary estimators. As a sensitivity check,
+`marginaleffects::avg_comparisons()` on a simple OLS interaction model should
+produce directionally consistent CATEs — if it does not, the more flexible methods
+should be trusted.
 
 ```{r marginaleffects}
+#| message: false
+# OLS with interaction — NOT the preferred estimator (assumes homoscedastic errors
+# on log-cost), but serves as a quick sanity check against AIPW.
 m_outcome <- lm(log(repair_cost) ~ steering_flag * claim_type +
                   vehicle_class + severity_score + region + vehicle_age,
                 data = claims)
@@ -343,29 +403,23 @@ avg_comp <- avg_comparisons(
   variables = "steering_flag",
   by        = "claim_type"
 )
-avg_comp
-```
 
-```{r marginaleffects-plot}
-#| fig-height: 4
-avg_comp |>
-  as_tibble() |>
-  ggplot(aes(x = claim_type, y = estimate,
-             ymin = conf.low, ymax = conf.high, colour = claim_type)) +
-  geom_hline(yintercept = 0, linetype = "dashed", colour = "#6B7280") +
-  geom_errorbar(width = 0.25, linewidth = 1.2) +
-  geom_point(size = 4) +
-  scale_colour_manual(values = c(
-    glass="#003781", body="#0066CC", engine="#00A9CE", total_loss="#FF6600"
-  ), guide = "none") +
-  scale_y_continuous(labels = scales::percent_format()) +
-  labs(
-    title    = "Average Marginal Effect of Steering (marginaleffects)",
-    subtitle = "Log-scale outcome model · 95% CI",
-    x        = "Claim Type",
-    y        = "ATE on log(cost) scale"
-  ) +
-  theme_allianz()
+# Check directional agreement with AIPW
+left_join(
+  as_tibble(avg_comp) |> select(claim_type, ols_est = estimate, ols_lo = conf.low, ols_hi = conf.high),
+  cate_df |> select(claim_type, aipw_pct = cate_pct),
+  by = "claim_type"
+) |>
+  mutate(agree = sign(ols_est) == sign(aipw_pct / 100)) |>
+  gt() |>
+  tab_header(title = "Sensitivity: OLS marginaleffects vs. AIPW",
+             subtitle = "Both estimators should agree in direction if assumptions hold") |>
+  fmt_number(columns = c(ols_est, ols_lo, ols_hi), decimals = 4) |>
+  fmt_number(columns = aipw_pct, decimals = 1, suffix = "%") |>
+  tab_style(style = cell_fill(color = "#003781"), locations = cells_column_labels()) |>
+  tab_style(style = list(cell_text(color = "white", weight = "bold")),
+            locations = cells_column_labels()) |>
+  tab_options(table.font.size = px(13))
 ```
 
 ## Business Interpretation
@@ -491,6 +545,11 @@ X_enc <- model.matrix(
 )
 
 X  <- cbind(X_num, X_enc)
+# Note on scale: grf requires a continuous Y; we use log(cost) to reduce the
+# influence of large outliers and stabilise variance. The AIPW in utils_models.R
+# uses a Gamma GLM on the original CHF scale. When comparing CATE estimates
+# below, both are converted to % change — they should agree directionally but
+# may differ in magnitude due to the scale difference (log-normal vs Gamma).
 Y  <- log(claims$repair_cost)
 W  <- claims$steering_flag
 
@@ -515,6 +574,13 @@ claims_cf <- claims |>
   )
 
 cat("Causal forest ATE:", round((exp(average_treatment_effect(cf)[["estimate"]]) - 1) * 100, 1), "%\n")
+
+# Calibration test: checks whether CATE estimates have the right mean and
+# whether heterogeneity is real or noise. Best Linear Projection of tau(X)
+# onto forest predictions — slope ≈ 1 means well-calibrated heterogeneity.
+tc <- test_calibration(cf)
+cat("\nCalibration test (BLP):\n")
+print(tc)
 cat("95% CI: [",
     round((exp(average_treatment_effect(cf)[["estimate"]] -
                1.96 * average_treatment_effect(cf)[["std.err"]]) - 1) * 100, 1),
@@ -546,27 +612,6 @@ ggplot(claims_cf, aes(x = cate_pct, fill = claim_type)) +
   theme(legend.position = "none")
 ```
 
-### Top 20% Most Benefiting Claims
-
-```{r cf-top-benefiters}
-#| fig-height: 4
-claims_cf |>
-  slice_min(cate_pct, prop = 0.20) |>  # most negative = highest benefit from steering
-  count(claim_type, region) |>
-  ggplot(aes(x = region, y = n, fill = claim_type)) +
-  geom_col(position = "stack", width = 0.7) +
-  scale_fill_manual(
-    values = c(glass="#003781", body="#0066CC", engine="#00A9CE", total_loss="#FF6600"),
-    name   = "Claim Type"
-  ) +
-  labs(
-    title    = "Top 20% Claims by Steering Benefit (Causal Forest)",
-    subtitle = "Claims where causal forest predicts largest cost reduction from network steering",
-    x        = NULL, y = "Count"
-  ) +
-  theme_allianz() +
-  theme(axis.text.x = element_text(angle = 30, hjust = 1))
-```
 
 ### Comparing AIPW vs. Causal Forest CATEs
 
