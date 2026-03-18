@@ -1,6 +1,6 @@
 # =============================================================================
 # utils_viz.R
-# Allianz Suisse ggplot2 theme + reusable plot functions
+# ggplot2 theme + reusable plot functions
 # =============================================================================
 
 library(tidyverse)

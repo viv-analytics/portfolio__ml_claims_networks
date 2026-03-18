@@ -8,7 +8,7 @@ project:
 
 website:
   title: "Motor Claims Partner Network"
-  description: "ML Analysis of the Allianz Suisse Partner Network"
+  description: "ML Analysis of the Motor Claims Partner Network"
   navbar:
     left:
       - text: "Overview"

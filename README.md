@@ -1,6 +1,6 @@
 # Motor Claims Partner Network — ML Analysis
 
-> **Audience:** Leiter Geschäftspartner-Netzwerke, Allianz Suisse
+> **Audience:** Leiter Geschäftspartner-Netzwerke
 > **Stack:** R · Quarto · mirai · tidyverse · lme4 · XGBoost · WeightIt · easystats
 
 A portfolio-grade R/Quarto project demonstrating end-to-end machine learning analysis of a

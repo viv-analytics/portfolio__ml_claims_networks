@@ -260,7 +260,7 @@ output$map_partners <- renderLeaflet({
     addLegend("bottomright",
               colors = c("#003781"),
               labels = c("Region (size = claim volume)"),
-              title  = "Allianz Suisse Network")
+              title  = "Partner Network")
 })
 
 output$donut_claim_type <- renderPlotly({

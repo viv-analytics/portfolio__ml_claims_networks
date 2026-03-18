@@ -1,6 +1,6 @@
 ---
 title: "Motor Claims Partner Network"
-subtitle: "Geschäftspartner-Netzwerke · Allianz Suisse"
+subtitle: "Geschäftspartner-Netzwerke"
 ---
 
 ```{r setup}
@@ -62,7 +62,7 @@ opportunity <- claims |>
 ::: {.hero-banner}
 # Netzwerk-Steuerung spart CHF — aber nicht überall gleich
 
-Routing motor claims through the Allianz Suisse partner network reduces average
+Routing motor claims through the partner network reduces average
 repair costs by **~12%**. Effect is concentrated in glass and body damage.
 Total loss cases show no benefit. Three analyses below tell you where to act.
 :::
